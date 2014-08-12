@@ -1,0 +1,18 @@
+{
+  "name": "Hakatanimation",
+  "version": "0.0.0",
+  "description": "",
+  "main": "Hakatanimation.js",
+  "dependencies": {
+    "request": "~2.40.0",
+    "iconv-lite": "~0.4.4",
+    "cheerio": "~0.17.0",
+    "async": "~0.9.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "MIT"
+}
