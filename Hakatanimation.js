@@ -1,30 +1,113 @@
 var child_process = require('child_process');
 var fs = require('fs');
+var readline = require('readline');
+
 var iconv = require('iconv-lite');
 var cheerio = require('cheerio');
 var request = require('request');
 var async = require('async');
+var ansi = require('ansi');
 
 var config = require('./config.js');
+var videoIndex = require('./videoIndex.json');
+var videoIndexRevision = Math.random();
+var videoIndexSavedRevision = videoIndexRevision;
+var videoIndexFileIsBusy = false;
 
-var videoIndex = JSON.parse(fs.readFileSync('videoIndex.json'));
+var cursor = ansi(process.stdout);
 
-request('http://ch.nicovideo.jp/portal/anime', function (error, response, body) {
-	if (error) console.error(error);
+// persistent request function
+function requestRetry(options, callback) {
+	async.retry(5, function (done) {
+		request(options, function (error, response, body) {
+			if (error) return done(error);
+			if (response.statusCode !== 200) return done(new Error('Status code is not OK'));
 
-	console.log('Retrieved channel page with responce ' + response.statusCode);
-	var $ = cheerio.load(body);
+			return done(null, {response: response, body: body});
+		});
+	}, function (error, result) {
+		if (typeof result !== 'object') result = {};
+		callback(error, result.response, result.body);
+	});
+}
 
-	async.eachSeries($('div.playerNavs > div > ul > li'), function($li, done) {
-		var li_id = $li.attribs.id;
-		var match;
+var previousLogIsVolatile = false;
 
-		if (match = li_id.match(/^.+?_.+?_(.+)$/)) {
-			var id = match[1];
+function info(text) {
+	cursor.reset();
 
-			console.log('Processing ' + id);
+	if (previousLogIsVolatile) cursor.write('\n');
+	cursor.write('[');
+	cursor.green().write('hakatanimation');
+	cursor.fg.reset().write('] ');
+	cursor.write(text + '\n');
+
+	previousLogIsVolatile = false;
+}
+
+function error(text) {
+	cursor.reset();
+
+	if (previousLogIsVolatile) cursor.write('\n');
+	cursor.write('[');
+	cursor.red().write('error');
+	cursor.fg.reset().write('] ');
+	cursor.write(text + '\n');
+
+	previousLogIsVolatile = false;
+}
+
+function volatileLog(text) {
+	cursor.reset();
+
+	if (previousLogIsVolatile) cursor.horizontalAbsolute(0).eraseLine();
+	cursor.write(text.trim());
+
+	previousLogIsVolatile = true;
+}
+
+function pushToVideoIndex(id) {
+	videoIndex.push(id);
+	videoIndexRevision = Math.random();
+	updateVideoIndex();
+}
+
+function updateVideoIndex() {
+	if (videoIndexRevision !== videoIndexSavedRevision && !videoIndexFileIsBusy) {
+		videoIndexFileIsBusy = true;
+		var currentVideoIndexRevision = videoIndexRevision;
+
+		fs.writeFile('videoIndex.json', JSON.stringify(videoIndex), function (err) {
+			if (err) error('Updating video index failed: ' + err.message);
+			videoIndexFileIsBusy = false;
+			videoIndexSavedRevision = currentVideoIndexRevision;
+			updateVideoIndex();
+		});
+	}
+}
+
+async.waterfall([
+	function (done) {
+		info('Retrieving niconico anime channel page');
+		done();
+	},
+	requestRetry.bind(this, 'http://ch.nicovideo.jp/portal/anime'),
+	function (responce, body, done) {
+		info('Retrieved niconico anime channel page');
+
+		var $ = cheerio.load(body);
+
+		info('Parsed page');
+
+		async.eachSeries($('div.playerNavs .video').get(), function (el, done) {
+			var elementId = el.attribs.id;
+			var id = elementId.split('_')[2];
+
+			if (!id) return done();
 
 			if (videoIndex.indexOf(id) === -1) {
+				info('Processing video ' + id);
+
 				var url = 'http://www.nicovideo.jp/watch/' + id;
 
 				var youtube_dl = child_process.spawn('python', [
@@ -35,22 +118,35 @@ request('http://ch.nicovideo.jp/portal/anime', function (error, response, body) 
 					url
 				]);
 
-				youtube_dl.stdout.on('data', function (data) {
-					var string = iconv.decode(data, 'Shift_JIS');
-					process.stdout.write(string);
+				var stdoutInterface = readline.createInterface({
+					input: youtube_dl.stdout.pipe(iconv.decodeStream('Shift_JIS')),
+					output: {}
 				});
 
-				youtube_dl.on('close', function (code) {
-					videoIndex.push(id);
+				var stderrInterface = readline.createInterface({
+					input: youtube_dl.stderr.pipe(iconv.decodeStream('Shift_JIS')),
+					output: {}
+				});
+
+				stdoutInterface.on('line', function (data) {
+					volatileLog(data);
+				});
+
+				stderrInterface.on('line', function (data) {
+					error(data);
+				});
+
+				youtube_dl.on('exit', function (code) {
+					if (code !== 0) error('Process failed');
+					else pushToVideoIndex(id);
 					done();
 				});
+			} else {
+				done();
 			}
-		}
-	}, function (error) {
-		if (error) console.log(error);
-
-		fs.writeFileSync('videoIndex.json', JSON.stringify(videoIndex));
-	});
+		}, done);
+	}
+], function (err) {
+	if (err) error('Mission failed: ' + err.message);
+	else info('Mission succeed');
 });
-
-console.log('Request sent...');

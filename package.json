@@ -4,10 +4,11 @@
   "description": "",
   "main": "Hakatanimation.js",
   "dependencies": {
-    "request": "~2.40.0",
-    "iconv-lite": "~0.4.4",
+    "ansi": "^0.3.0",
+    "async": "~0.9.0",
     "cheerio": "~0.17.0",
-    "async": "~0.9.0"
+    "iconv-lite": "~0.4.4",
+    "request": "~2.40.0"
   },
   "devDependencies": {},
   "scripts": {
